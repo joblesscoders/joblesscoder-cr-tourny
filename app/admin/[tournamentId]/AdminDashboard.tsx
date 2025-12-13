@@ -488,19 +488,20 @@ function AdminDashboardContent({
                   </CardTitle>
                   <CardDescription>Top 8 advance to playoffs • Click on a player to view match history</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <Accordion type="single" collapsible className="w-full">
+                <CardContent className="overflow-x-auto">
+                  <Accordion type="single" collapsible className="w-full min-w-[500px]">
                     {/* Table Header */}
-                    <div className="grid grid-cols-[40px_1fr_40px_40px_40px_50px_50px_50px_50px] md:grid-cols-[50px_1fr_50px_50px_50px_60px_60px_60px_60px] gap-2 px-4 py-3 text-sm text-muted-foreground border-b border-border">
-                      <div>Pos</div>
-                      <div>Player</div>
-                      <div className="text-center">P</div>
-                      <div className="text-center">W</div>
-                      <div className="text-center">L</div>
-                      <div className="text-center">Pts</div>
-                      <div className="text-center hidden md:block">CF</div>
-                      <div className="text-center hidden md:block">CA</div>
-                      <div className="text-center">CD</div>
+                    <div className="flex items-center px-3 py-3 text-sm text-muted-foreground border-b border-border font-medium">
+                      <div className="w-9 text-center shrink-0">#</div>
+                      <div className="flex-1 min-w-[80px]">Player</div>
+                      <div className="w-8 text-center shrink-0" title="Played">P</div>
+                      <div className="w-8 text-center shrink-0" title="Wins">W</div>
+                      <div className="w-8 text-center shrink-0" title="Losses">L</div>
+                      <div className="w-9 text-center shrink-0" title="Points">Pts</div>
+                      <div className="w-10 text-center shrink-0" title="Crowns For">CF</div>
+                      <div className="w-10 text-center shrink-0" title="Crowns Against">CA</div>
+                      <div className="w-9 text-center shrink-0" title="Crown Difference">+/-</div>
+                      <div className="w-6 shrink-0"></div>
                     </div>
                     {standings.map((s, idx) => {
                       const playerMatches = matches.filter(
@@ -511,20 +512,22 @@ function AdminDashboardContent({
                       
                       return (
                         <AccordionItem key={s.id} value={s.id} className={`border-b border-border ${idx < 8 ? 'bg-green-500/10' : ''}`}>
-                          <AccordionTrigger className="hover:no-underline hover:bg-white/5 px-4 py-3">
-                            <div className="grid grid-cols-[40px_1fr_40px_40px_40px_50px_50px_50px_50px] md:grid-cols-[50px_1fr_50px_50px_50px_60px_60px_60px_60px] gap-2 w-full text-sm items-center">
-                              <div className="font-medium flex items-center">
-                                {idx < 8 && <Medal className="w-4 h-4 text-yellow-400 mr-1" />}
-                                {idx + 1}
+                          <AccordionTrigger className="hover:no-underline hover:bg-white/5 px-3 py-3">
+                            <div className="flex items-center w-full text-sm">
+                              <div className="w-9 shrink-0 font-medium flex items-center justify-center gap-0.5">
+                                {idx < 8 && <Medal className="w-3 h-3 text-yellow-400" />}
+                                <span>{idx + 1}</span>
                               </div>
-                              <div className="font-semibold text-white text-left">{s.players?.player_name}</div>
-                              <div className="text-center">{s.games_played}</div>
-                              <div className="text-center text-green-400">{s.wins}</div>
-                              <div className="text-center text-red-400">{s.losses}</div>
-                              <div className="text-center font-bold text-yellow-400">{s.points}</div>
-                              <div className="text-center hidden md:block">{s.crowns_for}</div>
-                              <div className="text-center hidden md:block">{s.crowns_against}</div>
-                              <div className="text-center">{s.crown_difference > 0 ? '+' : ''}{s.crown_difference}</div>
+                              <div className="flex-1 min-w-[80px] font-semibold text-white text-left truncate pr-1">{s.players?.player_name}</div>
+                              <div className="w-8 text-center shrink-0 text-muted-foreground">{s.games_played}</div>
+                              <div className="w-8 text-center shrink-0 text-green-400 font-medium">{s.wins}</div>
+                              <div className="w-8 text-center shrink-0 text-red-400">{s.losses}</div>
+                              <div className="w-9 text-center shrink-0 font-bold text-yellow-400">{s.points}</div>
+                              <div className="w-10 text-center shrink-0 text-blue-400">{s.crowns_for}</div>
+                              <div className="w-10 text-center shrink-0 text-orange-400">{s.crowns_against}</div>
+                              <div className={`w-9 text-center shrink-0 font-medium ${s.crown_difference > 0 ? 'text-green-400' : s.crown_difference < 0 ? 'text-red-400' : 'text-muted-foreground'}`}>
+                                {s.crown_difference > 0 ? '+' : ''}{s.crown_difference}
+                              </div>
                             </div>
                           </AccordionTrigger>
                           <AccordionContent className="px-4 pb-4">
