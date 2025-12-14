@@ -78,6 +78,20 @@ export default function TournamentViewer({
             {tournament.status === 'playoffs' && `${tournament.current_phase?.toUpperCase()} Finals`}
             {tournament.status === 'completed' && '🏆 Tournament Complete'}
           </Badge>
+          {/* Description & Rules */}
+          {tournament.description && (
+            <p className="text-lg text-muted-foreground max-w-3xl mx-auto mt-4">{tournament.description}</p>
+          )}
+          {tournament.rules && Array.isArray(tournament.rules) && tournament.rules.length > 0 && (
+            <div className="max-w-3xl mx-auto mt-4 text-left">
+              <h4 className="text-sm font-semibold text-purple-300 mb-2">Rules</h4>
+              <ul className="list-disc list-inside text-muted-foreground">
+                {tournament.rules.map((r: any, idx: number) => (
+                  <li key={idx}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         {/* Setup Phase */}

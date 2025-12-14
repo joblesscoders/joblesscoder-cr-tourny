@@ -9,6 +9,8 @@ import Link from 'next/link'
 type Tournament = {
   id: string
   name: string
+  description?: string | null
+  rules?: any
   status: 'setup' | 'league' | 'playoffs' | 'completed'
   current_phase: 'league' | 'quarter' | 'semi' | 'final' | null
   created_at: string
@@ -114,6 +116,9 @@ export function TournamentOverview({ tournaments }: TournamentOverviewProps) {
                               <Badge className={`${statusConfig.bgColor} ${statusConfig.color} border-0`}>
                                 {statusConfig.label}
                               </Badge>
+                              {tournament.description && (
+                                <p className="text-sm text-muted-foreground max-w-xl truncate">{tournament.description}</p>
+                              )}
                               <span className="text-sm text-muted-foreground flex items-center gap-1" suppressHydrationWarning>
                                 <Calendar className="w-4 h-4" />
                                 {new Date(tournament.created_at).toLocaleDateString('en-US', { 
@@ -137,7 +142,7 @@ export function TournamentOverview({ tournaments }: TournamentOverviewProps) {
                             <Button className="bg-purple-600 hover:bg-purple-700">
                               <Settings className="w-4 h-4 mr-2" />
                               Manage
-                              <ChevronRight className="w-4 h-4 ml-1" />
+                              <ChevronRight className="w-4 ml-1" />
                             </Button>
                           </Link>
                         </div>

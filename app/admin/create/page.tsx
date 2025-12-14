@@ -17,6 +17,8 @@ import Link from 'next/link'
 function CreateTournamentForm() {
   const router = useRouter()
   const [tournamentName, setTournamentName] = useState('')
+  const [description, setDescription] = useState('')
+  const [rules, setRules] = useState<string[]>([''])
   const [players, setPlayers] = useState<Array<{ name: string; tag: string }>>([
     { name: '', tag: '' },
   ])
@@ -26,6 +28,20 @@ function CreateTournamentForm() {
     if (players.length < 12) {
       setPlayers([...players, { name: '', tag: '' }])
     }
+  }
+
+  const addRule = () => {
+    setRules([...rules, ''])
+  }
+
+  const removeRule = (index: number) => {
+    setRules(rules.filter((_, i) => i !== index))
+  }
+
+  const updateRule = (index: number, value: string) => {
+    const updated = [...rules]
+    updated[index] = value
+    setRules(updated)
   }
 
   const removePlayer = (index: number) => {
@@ -58,6 +74,8 @@ function CreateTournamentForm() {
         .from('tournaments')
         .insert({
           name: tournamentName,
+          description: description || null,
+          rules: rules.filter(r => r.trim() !== ''),
           status: 'setup',
           current_phase: null,
         })
@@ -141,6 +159,41 @@ function CreateTournamentForm() {
                 className="bg-secondary border-border focus:border-purple-500"
                 placeholder="e.g., JoblessCoders Season 1"
               />
+            </div>
+
+            {/* Description */}
+            <div className="space-y-2">
+              <Label htmlFor="description" className="text-white">Description (optional)</Label>
+              <textarea
+                id="description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full min-h-[80px] bg-secondary border-border rounded-md p-2 text-sm"
+                placeholder="Brief description of the tournament"
+              />
+            </div>
+
+            {/* Rules */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-white">Rules (optional)</Label>
+                <Button onClick={addRule} variant="ghost" size="sm">Add Rule</Button>
+              </div>
+              <div className="space-y-2">
+                {rules.map((rule, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <Input
+                      value={rule}
+                      onChange={(e) => updateRule(idx, e.target.value)}
+                      placeholder={`Rule ${idx + 1}`}
+                      className="flex-1 bg-background border-border"
+                    />
+                    <Button onClick={() => removeRule(idx)} variant="ghost" size="icon" className="text-red-400">
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Players section */}

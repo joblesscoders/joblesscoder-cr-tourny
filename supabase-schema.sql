@@ -7,6 +7,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE tournaments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
+    description TEXT,
+    rules JSONB DEFAULT '[]'::jsonb,
     status TEXT NOT NULL CHECK (status IN ('setup', 'league', 'playoffs', 'completed')),
     current_phase TEXT CHECK (current_phase IN ('league', 'quarter', 'semi', 'final')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

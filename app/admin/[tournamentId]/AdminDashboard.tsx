@@ -57,6 +57,8 @@ function AdminDashboardContent({
   // Edit tournament dialog state
   const [editTournamentDialog, setEditTournamentDialog] = useState(false)
   const [tournamentName, setTournamentName] = useState(initialData.tournament.name)
+  const [description, setDescription] = useState(initialData.tournament.description || '')
+  const [rules, setRules] = useState<string[]>((initialData.tournament.rules as string[] | null) || [''])
 
   // Edit player dialog state
   const [editPlayerDialog, setEditPlayerDialog] = useState<{
@@ -108,6 +110,8 @@ function AdminDashboardContent({
         playoffMatches: playoffRes.data || [],
       })
       setTournamentName(tournamentRes.data.name)
+      setDescription(tournamentRes.data.description || '')
+      setRules((tournamentRes.data.rules as string[] | null) || [''])
     }
   }
 
@@ -216,7 +220,7 @@ function AdminDashboardContent({
     try {
       const { error } = await supabase
         .from('tournaments')
-        .update({ name: tournamentName.trim() })
+        .update({ name: tournamentName.trim(), description: description || null, rules: rules.filter(r => r.trim() !== '') })
         .eq('id', tournamentId)
 
       if (error) throw error
@@ -384,6 +388,10 @@ function AdminDashboardContent({
                 <DropdownMenuItem onClick={() => setEditTournamentDialog(true)}>
                   <Edit className="w-4 h-4 mr-2" />
                   Edit Tournament
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push(`/admin/${tournamentId}/rules`)}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit Rules
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem 
@@ -823,17 +831,56 @@ function AdminDashboardContent({
               <DialogTitle className="text-white">Edit Tournament</DialogTitle>
               <DialogDescription>Update tournament details</DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label className="text-white">Tournament Name</Label>
-                <Input
-                  value={tournamentName}
-                  onChange={(e) => setTournamentName(e.target.value)}
-                  placeholder="Enter tournament name"
-                  className="bg-secondary border-border"
-                />
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <Label className="text-white">Tournament Name</Label>
+                  <Input
+                    value={tournamentName}
+                    onChange={(e) => setTournamentName(e.target.value)}
+                    placeholder="Enter tournament name"
+                    className="bg-secondary border-border"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label className="text-white">Description (optional)</Label>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    className="w-full min-h-[80px] bg-secondary border-border rounded-md p-2 text-sm"
+                    placeholder="Tournament description"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-white">Rules (optional)</Label>
+                    <Button onClick={() => setRules([...rules, ''])} variant="ghost" size="sm">Add Rule</Button>
+                  </div>
+                  <div className="space-y-2">
+                    {rules.map((rule, idx) => (
+                      <div key={idx} className="flex gap-2">
+                        <Input
+                          value={rule}
+                          onChange={(e) => {
+                            const updated = [...rules]
+                            updated[idx] = e.target.value
+                            setRules(updated)
+                          }}
+                          placeholder={`Rule ${idx + 1}`}
+                          className="flex-1 bg-background border-border"
+                        />
+                        <Button onClick={() => setRules(rules.filter((_, i) => i !== idx))} variant="ghost" size="icon" className="text-red-400">
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => router.push(`/admin/${tournamentId}/rules`)}>
+                    Open Rules Editor
+                  </Button>
+                </div>
               </div>
-            </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditTournamentDialog(false)}>
                 Cancel
