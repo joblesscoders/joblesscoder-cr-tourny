@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Navbar } from '@/components/navbar'
 import Link from 'next/link'
+import KnockoutBracket from '@/components/knockout-bracket'
 
 type TournamentData = {
   tournament: any
@@ -240,6 +241,8 @@ export default function TournamentViewer({
                   </Accordion>
                 </CardContent>
               </Card>
+              {/* Knockout bracket shown under standings during league; shows predicted top-8 */}
+              <KnockoutBracket standings={standings} playoffMatches={playoffMatches} status={tournament.status} />
             </TabsContent>
 
             <TabsContent value="matches">

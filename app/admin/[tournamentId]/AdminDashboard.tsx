@@ -21,6 +21,7 @@ import { Navbar } from '@/components/navbar'
 import { AdminAuthGuard } from '@/components/admin-auth'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import KnockoutBracket from '@/components/knockout-bracket'
 
 type TournamentData = {
   tournament: any
@@ -603,6 +604,11 @@ function AdminDashboardContent({
                 </CardContent>
               </Card>
             </TabsContent>
+
+              {/* Predicted / Live Knockout Bracket */}
+              <div className="mt-6">
+                <KnockoutBracket standings={standings} playoffMatches={playoffMatches} status={tournament.status} />
+              </div>
 
             <TabsContent value="matches">
               <Card className="glass-card border-purple-500/20">
