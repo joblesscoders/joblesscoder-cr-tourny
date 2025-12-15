@@ -1,7 +1,7 @@
 import React from 'react'
 import { Trophy } from 'lucide-react'
 
-type PlayerSlot = { id?: string; name?: string }
+type PlayerSlot = { id?: string; name?: string; rank?: number }
 
 type Match = {
   player1?: PlayerSlot
@@ -27,12 +27,19 @@ function PlayerCard({
         : 'bg-secondary/60 border border-border/40 hover:border-border/60'
     }`}>
       <div className="flex items-center gap-2.5 flex-1 min-w-0">
-        <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${
-          isWinner 
-            ? 'bg-green-500/40 text-green-100 ring-2 ring-green-400/50' 
-            : 'bg-gradient-to-br from-purple-500/40 to-purple-600/30 text-purple-100'
-        }`}>
-          {p?.name ? p.name.charAt(0).toUpperCase() : '-'}
+        <div className="relative">
+          <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${
+            isWinner 
+              ? 'bg-green-500/40 text-green-100 ring-2 ring-green-400/50' 
+              : 'bg-gradient-to-br from-purple-500/40 to-purple-600/30 text-purple-100'
+          }`}>
+            {p?.name ? p.name.charAt(0).toUpperCase() : '-'}
+          </div>
+          {p?.rank && (
+            <div className="absolute -top-1 -right-1 w-4 h-4 bg-yellow-500 text-black text-[10px] font-bold rounded-full flex items-center justify-center border border-black/20 shadow-sm">
+              {p.rank}
+            </div>
+          )}
         </div>
         <div className={`text-sm font-semibold truncate ${isWinner ? 'text-white' : 'text-gray-200'}`}>
           {p?.name || 'TBD'}
@@ -79,8 +86,15 @@ export default function KnockoutBracket({
   playoffMatches: any[]
   status: 'setup' | 'league' | 'playoffs' | 'completed'
 }) {
+  // Create rank map from standings
+  const rankMap = new Map(standings.map((s, i) => [s.player_id, i + 1]))
+
   // compute probable top8 from standings
-  const probable = (standings || []).slice(0, 8).map(s => ({ id: s.player_id, name: s.players?.player_name || s.player_name }))
+  const probable = (standings || []).slice(0, 8).map((s, i) => ({ 
+    id: s.player_id, 
+    name: s.players?.player_name || s.player_name,
+    rank: i + 1
+  }))
 
   // if playoffs exist, map matches
   const quarters = playoffMatches?.filter((m: any) => m.round === 'quarter').sort((a: any, b: any) => a.match_number - b.match_number) || []
@@ -90,39 +104,42 @@ export default function KnockoutBracket({
   // before playoffs generate predicted quarter matches from probable
   const predictedQuarters: Match[] = []
   if (status === 'league') {
-    const slots = [0,7,1,6,2,5,3,4]
+    // Order: 1v8, 4v5, 2v7, 3v6
+    const slots = [0, 7, 3, 4, 1, 6, 2, 5]
     for (let i = 0; i < 8; i += 2) {
       const p1 = probable[slots[i]]
       const p2 = probable[slots[i+1]]
-      predictedQuarters.push({ player1: p1, player2: p2 })
+      if (p1 && p2) {
+        predictedQuarters.push({ player1: p1, player2: p2 })
+      }
     }
   }
 
   const quarterMatches: Match[] = status === 'league' 
     ? predictedQuarters 
     : quarters.map((q: any) => ({ 
-        player1: q.player1, 
-        player2: q.player2, 
+        player1: { id: q.player1_id, name: q.player1?.player_name, rank: rankMap.get(q.player1_id) }, 
+        player2: { id: q.player2_id, name: q.player2?.player_name, rank: rankMap.get(q.player2_id) }, 
         score1: q.player1_score, 
         score2: q.player2_score,
-        winner: q.winner 
+        winner: q.winner ? { id: q.winner_id, name: q.winner?.player_name, rank: rankMap.get(q.winner_id) } : undefined
       }))
   
   const semiMatches: Match[] = semis.map((s: any) => ({ 
-    player1: s.player1, 
-    player2: s.player2, 
+    player1: s.player1 ? { id: s.player1_id, name: s.player1?.player_name, rank: rankMap.get(s.player1_id) } : undefined, 
+    player2: s.player2 ? { id: s.player2_id, name: s.player2?.player_name, rank: rankMap.get(s.player2_id) } : undefined, 
     score1: s.player1_score, 
     score2: s.player2_score,
-    winner: s.winner 
+    winner: s.winner ? { id: s.winner_id, name: s.winner?.player_name, rank: rankMap.get(s.winner_id) } : undefined
   }))
   
   const finalMatch: Match | null = finals[0] 
     ? { 
-        player1: finals[0].player1, 
-        player2: finals[0].player2, 
+        player1: finals[0].player1 ? { id: finals[0].player1_id, name: finals[0].player1?.player_name, rank: rankMap.get(finals[0].player1_id) } : undefined, 
+        player2: finals[0].player2 ? { id: finals[0].player2_id, name: finals[0].player2?.player_name, rank: rankMap.get(finals[0].player2_id) } : undefined, 
         score1: finals[0].player1_score, 
         score2: finals[0].player2_score,
-        winner: finals[0].winner 
+        winner: finals[0].winner ? { id: finals[0].winner_id, name: finals[0].winner?.player_name, rank: rankMap.get(finals[0].winner_id) } : undefined
       } 
     : null
 
