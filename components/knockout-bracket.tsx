@@ -101,6 +101,26 @@ export default function KnockoutBracket({
   const semis = playoffMatches?.filter((m: any) => m.round === 'semi').sort((a: any, b: any) => a.match_number - b.match_number) || []
   const finals = playoffMatches?.filter((m: any) => m.round === 'final').sort((a: any, b: any) => a.match_number - b.match_number) || []
 
+  const sortQuarterRowsForBracket = (rows: any[]) => {
+    // Desired visual bracket order (keeps 1/2 on opposite halves): 1v8, 4v5, 2v7, 3v6
+    const desiredSeedOrder = [1, 4, 2, 3]
+
+    const seedIndex = (row: any) => {
+      const r1 = rankMap.get(row.player1_id)
+      const r2 = rankMap.get(row.player2_id)
+      const minRank = typeof r1 === 'number' && typeof r2 === 'number' ? Math.min(r1, r2) : undefined
+      const idx = typeof minRank === 'number' ? desiredSeedOrder.indexOf(minRank) : -1
+      return idx === -1 ? Number.MAX_SAFE_INTEGER : idx
+    }
+
+    return [...rows].sort((a, b) => {
+      const ai = seedIndex(a)
+      const bi = seedIndex(b)
+      if (ai !== bi) return ai - bi
+      return (a.match_number ?? 0) - (b.match_number ?? 0)
+    })
+  }
+
   // before playoffs generate predicted quarter matches from probable
   const predictedQuarters: Match[] = []
   if (status === 'league') {
@@ -115,14 +135,14 @@ export default function KnockoutBracket({
     }
   }
 
-  const quarterMatches: Match[] = status === 'league' 
-    ? predictedQuarters 
-    : quarters.map((q: any) => ({ 
-        player1: { id: q.player1_id, name: q.player1?.player_name, rank: rankMap.get(q.player1_id) }, 
-        player2: { id: q.player2_id, name: q.player2?.player_name, rank: rankMap.get(q.player2_id) }, 
-        score1: q.player1_score, 
+  const quarterMatches: Match[] = status === 'league'
+    ? predictedQuarters
+    : sortQuarterRowsForBracket(quarters).map((q: any) => ({
+        player1: { id: q.player1_id, name: q.player1?.player_name, rank: rankMap.get(q.player1_id) },
+        player2: { id: q.player2_id, name: q.player2?.player_name, rank: rankMap.get(q.player2_id) },
+        score1: q.player1_score,
         score2: q.player2_score,
-        winner: q.winner ? { id: q.winner_id, name: q.winner?.player_name, rank: rankMap.get(q.winner_id) } : undefined
+        winner: q.winner ? { id: q.winner_id, name: q.winner?.player_name, rank: rankMap.get(q.winner_id) } : undefined,
       }))
   
   const semiMatches: Match[] = semis.map((s: any) => ({ 
