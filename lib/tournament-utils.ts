@@ -207,7 +207,8 @@ export async function generatePlayoffBracket(tournamentId: string) {
     throw new Error('Not enough qualified players (need 8)')
   }
 
-  // Create quarter-final matchups (1v8, 2v7, 3v6, 4v5)
+  // Create quarter-final matchups in bracket order (keeps 1/2 on opposite halves):
+  // 1v8, 4v5, 2v7, 3v6
   const quarterFinals = [
     {
       tournament_id: tournamentId,
@@ -221,6 +222,14 @@ export async function generatePlayoffBracket(tournamentId: string) {
       tournament_id: tournamentId,
       round: 'quarter' as const,
       match_number: 2,
+      player1_id: standings[3].player_id,
+      player2_id: standings[4].player_id,
+      status: 'pending' as const,
+    },
+    {
+      tournament_id: tournamentId,
+      round: 'quarter' as const,
+      match_number: 3,
       player1_id: standings[1].player_id,
       player2_id: standings[6].player_id,
       status: 'pending' as const,
@@ -228,17 +237,9 @@ export async function generatePlayoffBracket(tournamentId: string) {
     {
       tournament_id: tournamentId,
       round: 'quarter' as const,
-      match_number: 3,
+      match_number: 4,
       player1_id: standings[2].player_id,
       player2_id: standings[5].player_id,
-      status: 'pending' as const,
-    },
-    {
-      tournament_id: tournamentId,
-      round: 'quarter' as const,
-      match_number: 4,
-      player1_id: standings[3].player_id,
-      player2_id: standings[4].player_id,
       status: 'pending' as const,
     },
   ]

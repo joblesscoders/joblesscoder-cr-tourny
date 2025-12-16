@@ -163,17 +163,56 @@ function AdminDashboardContent({
 
         // Handle round progression
         if (scoreDialog.round === 'quarter') {
-          const { data: quarters } = await supabase.from('playoff_matches').select('*').eq('tournament_id', tournamentId).eq('round', 'quarter')
-          if (quarters && quarters.every(m => m.status === 'completed')) {
-            const semis = [
-              { tournament_id: tournamentId, round: 'semi', match_number: 1, player1_id: quarters[0].winner_id, player2_id: quarters[1].winner_id, status: 'pending' },
-              { tournament_id: tournamentId, round: 'semi', match_number: 2, player1_id: quarters[2].winner_id, player2_id: quarters[3].winner_id, status: 'pending' },
-            ]
-            await supabase.from('playoff_matches').insert(semis)
-            await supabase.from('tournaments').update({ current_phase: 'semi' }).eq('id', tournamentId)
+          const { data: quarters } = await supabase
+            .from('playoff_matches')
+            .select('*')
+            .eq('tournament_id', tournamentId)
+            .eq('round', 'quarter')
+
+          if (quarters && quarters.length === 4 && quarters.every(m => m.status === 'completed')) {
+            // Avoid duplicate semi creation
+            const { data: existingSemis } = await supabase
+              .from('playoff_matches')
+              .select('id')
+              .eq('tournament_id', tournamentId)
+              .eq('round', 'semi')
+
+            if (!existingSemis || existingSemis.length === 0) {
+              // Sort quarters into bracket order: 1v8, 4v5, 2v7, 3v6
+              const rankMap = new Map((data.standings || []).map((s: any, i: number) => [s.player_id, i + 1]))
+              const desiredSeedOrder = [1, 4, 2, 3]
+
+              const seedIndex = (m: any) => {
+                const r1 = rankMap.get(m.player1_id)
+                const r2 = rankMap.get(m.player2_id)
+                const minRank = typeof r1 === 'number' && typeof r2 === 'number' ? Math.min(r1, r2) : undefined
+                const idx = typeof minRank === 'number' ? desiredSeedOrder.indexOf(minRank) : -1
+                return idx === -1 ? Number.MAX_SAFE_INTEGER : idx
+              }
+
+              const orderedQuarters = [...quarters].sort((a, b) => {
+                const ai = seedIndex(a)
+                const bi = seedIndex(b)
+                if (ai !== bi) return ai - bi
+                return (a.match_number ?? 0) - (b.match_number ?? 0)
+              })
+
+              const semis = [
+                { tournament_id: tournamentId, round: 'semi', match_number: 1, player1_id: orderedQuarters[0].winner_id, player2_id: orderedQuarters[1].winner_id, status: 'pending' },
+                { tournament_id: tournamentId, round: 'semi', match_number: 2, player1_id: orderedQuarters[2].winner_id, player2_id: orderedQuarters[3].winner_id, status: 'pending' },
+              ]
+
+              await supabase.from('playoff_matches').insert(semis)
+              await supabase.from('tournaments').update({ current_phase: 'semi' }).eq('id', tournamentId)
+            }
           }
         } else if (scoreDialog.round === 'semi') {
-          const { data: semis } = await supabase.from('playoff_matches').select('*').eq('tournament_id', tournamentId).eq('round', 'semi')
+          const { data: semis } = await supabase
+            .from('playoff_matches')
+            .select('*')
+            .eq('tournament_id', tournamentId)
+            .eq('round', 'semi')
+            .order('match_number', { ascending: true })
           if (semis && semis.every(m => m.status === 'completed')) {
             await supabase.from('playoff_matches').insert({ tournament_id: tournamentId, round: 'final', match_number: 1, player1_id: semis[0].winner_id, player2_id: semis[1].winner_id, status: 'pending' })
             await supabase.from('tournaments').update({ current_phase: 'final' }).eq('id', tournamentId)
