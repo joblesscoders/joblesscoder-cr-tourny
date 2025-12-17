@@ -28,14 +28,14 @@ export async function generateLeagueFixtures(tournamentId: string) {
     .eq('tournament_id', tournamentId)
     .order('seed_position')
 
-  if (playersError || !players || players.length !== 12) {
-    throw new Error('Failed to fetch players or incorrect player count')
+  if (playersError || !players || players.length < 4) {
+    throw new Error('Failed to fetch players or insufficient player count (min 4)')
   }
 
   // Generate fixtures for single league (all 12 players)
   const fixtures = generateRoundRobinFixtures(players)
 
-  // Prepare match inserts (66 matches total for 12 players)
+  // Prepare match inserts (dynamic based on players count)
   const matches = fixtures.map((fixture, index) => ({
     tournament_id: tournamentId,
     match_number: index + 1,
@@ -75,6 +75,13 @@ export async function generateLeagueFixtures(tournamentId: string) {
   }
 
   return { matches }
+}
+
+// Calculate dynamic playoff format based on total participants
+export function calculatePlayoffQualifiers(totalPlayers: number): 4 | 8 | 16 {
+  if (totalPlayers >= 4 && totalPlayers <= 7) return 4
+  if (totalPlayers >= 8 && totalPlayers <= 15) return 8
+  return 16
 }
 
 // Update standings after a match result
@@ -194,70 +201,158 @@ export async function updateStandingsSimple(
 
 // Generate playoff bracket from league standings
 export async function generatePlayoffBracket(tournamentId: string) {
-  // Get top 8 from the league
-  const { data: standings } = await supabase
+  // Get all standings ordered by points and crown diff
+  const { data: allStandings } = await supabase
     .from('league_standings')
     .select('*, players(*)')
     .eq('tournament_id', tournamentId)
     .order('points', { ascending: false })
     .order('crown_difference', { ascending: false })
-    .limit(8)
 
-  if (!standings || standings.length !== 8) {
-    throw new Error('Not enough qualified players (need 8)')
+  if (!allStandings || allStandings.length < 4) {
+    throw new Error('Not enough qualified players (need at least 4)')
   }
 
-  // Create quarter-final matchups in bracket order (keeps 1/2 on opposite halves):
-  // 1v8, 4v5, 2v7, 3v6
+  const qualifiers = calculatePlayoffQualifiers(allStandings.length)
+  const standings = allStandings.slice(0, qualifiers)
+
+  if (qualifiers === 4) {
+    // Semi-finals: 1v4, 2v3
+    const semiFinals = [
+      { tournament_id: tournamentId, round: 'semi' as const, match_number: 1, player1_id: standings[0].player_id, player2_id: standings[3].player_id, status: 'pending' as const },
+      { tournament_id: tournamentId, round: 'semi' as const, match_number: 2, player1_id: standings[1].player_id, player2_id: standings[2].player_id, status: 'pending' as const },
+    ]
+
+    const { error } = await supabase.from('playoff_matches').insert(semiFinals)
+    if (error) throw new Error('Failed to create playoff bracket')
+
+    await supabase.from('tournaments').update({ status: 'playoffs', current_phase: 'semi' }).eq('id', tournamentId)
+    return semiFinals
+  }
+
+  // qualifiers === 8
   const quarterFinals = [
-    {
-      tournament_id: tournamentId,
-      round: 'quarter' as const,
-      match_number: 1,
-      player1_id: standings[0].player_id,
-      player2_id: standings[7].player_id,
-      status: 'pending' as const,
-    },
-    {
-      tournament_id: tournamentId,
-      round: 'quarter' as const,
-      match_number: 2,
-      player1_id: standings[3].player_id,
-      player2_id: standings[4].player_id,
-      status: 'pending' as const,
-    },
-    {
-      tournament_id: tournamentId,
-      round: 'quarter' as const,
-      match_number: 3,
-      player1_id: standings[1].player_id,
-      player2_id: standings[6].player_id,
-      status: 'pending' as const,
-    },
-    {
-      tournament_id: tournamentId,
-      round: 'quarter' as const,
-      match_number: 4,
-      player1_id: standings[2].player_id,
-      player2_id: standings[5].player_id,
-      status: 'pending' as const,
-    },
+    { tournament_id: tournamentId, round: 'quarter' as const, match_number: 1, player1_id: standings[0].player_id, player2_id: standings[7].player_id, status: 'pending' as const },
+    { tournament_id: tournamentId, round: 'quarter' as const, match_number: 2, player1_id: standings[3].player_id, player2_id: standings[4].player_id, status: 'pending' as const },
+    { tournament_id: tournamentId, round: 'quarter' as const, match_number: 3, player1_id: standings[1].player_id, player2_id: standings[6].player_id, status: 'pending' as const },
+    { tournament_id: tournamentId, round: 'quarter' as const, match_number: 4, player1_id: standings[2].player_id, player2_id: standings[5].player_id, status: 'pending' as const },
   ]
 
-  // Insert quarter-finals
-  const { error } = await supabase
-    .from('playoff_matches')
-    .insert(quarterFinals)
+  const { error } = await supabase.from('playoff_matches').insert(quarterFinals)
+  if (error) throw new Error('Failed to create playoff bracket')
 
-  if (error) {
-    throw new Error('Failed to create playoff bracket')
+  await supabase.from('tournaments').update({ status: 'playoffs', current_phase: 'quarter' }).eq('id', tournamentId)
+  return quarterFinals
+}
+
+// Recalculate standings from scratch by replaying all completed league matches
+export async function recalculateStandings(tournamentId: string) {
+  // Fetch all players to ensure standings exist
+  const { data: players } = await supabase
+    .from('players')
+    .select('id')
+    .eq('tournament_id', tournamentId)
+
+  if (!players || players.length === 0) return
+
+  // Reset standings for all players
+  const { data: currentStandings } = await supabase
+    .from('league_standings')
+    .select('*')
+    .eq('tournament_id', tournamentId)
+
+  if (currentStandings && currentStandings.length > 0) {
+    // Zero out all metrics
+    const updates = currentStandings.map(s => ({
+      id: s.id,
+      wins: 0,
+      losses: 0,
+      points: 0,
+      games_played: 0,
+      crowns_for: 0,
+      crowns_against: 0,
+      crown_difference: 0,
+    }))
+
+    // Batch update (Supabase doesn't support bulk update by id array in one call, so do per row)
+    for (const u of updates) {
+      await supabase
+        .from('league_standings')
+        .update({
+          wins: u.wins,
+          losses: u.losses,
+          points: u.points,
+          games_played: u.games_played,
+          crowns_for: u.crowns_for,
+          crowns_against: u.crowns_against,
+          crown_difference: u.crown_difference,
+        })
+        .eq('id', u.id)
+    }
+  } else {
+    // Initialize standings for all players if missing
+    const init = players.map(p => ({
+      tournament_id: tournamentId,
+      player_id: p.id,
+      wins: 0,
+      losses: 0,
+      points: 0,
+      games_played: 0,
+      crowns_for: 0,
+      crowns_against: 0,
+      crown_difference: 0,
+    }))
+    await supabase.from('league_standings').insert(init)
   }
 
-  // Update tournament status
-  await supabase
-    .from('tournaments')
-    .update({ status: 'playoffs', current_phase: 'quarter' })
-    .eq('id', tournamentId)
+  // Replay all completed matches
+  const { data: matches } = await supabase
+    .from('league_matches')
+    .select('*')
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'completed')
+    .order('match_number', { ascending: true })
 
-  return quarterFinals
+  if (!matches || matches.length === 0) return
+
+  for (const m of matches) {
+    const player1Won = (m.player1_score ?? 0) > (m.player2_score ?? 0)
+
+    const { data: standings } = await supabase
+      .from('league_standings')
+      .select('*')
+      .eq('tournament_id', tournamentId)
+      .in('player_id', [m.player1_id, m.player2_id])
+
+    if (!standings || standings.length !== 2) continue
+
+    const s1 = standings.find(s => s.player_id === m.player1_id)!
+    const s2 = standings.find(s => s.player_id === m.player2_id)!
+
+    await supabase
+      .from('league_standings')
+      .update({
+        wins: s1.wins + (player1Won ? 1 : 0),
+        losses: s1.losses + (player1Won ? 0 : 1),
+        points: s1.points + (player1Won ? 3 : 0),
+        games_played: s1.games_played + 1,
+        crowns_for: s1.crowns_for + (m.player1_score ?? 0),
+        crowns_against: s1.crowns_against + (m.player2_score ?? 0),
+        crown_difference: (s1.crowns_for + (m.player1_score ?? 0)) - (s1.crowns_against + (m.player2_score ?? 0)),
+      })
+      .eq('id', s1.id)
+
+    await supabase
+      .from('league_standings')
+      .update({
+        wins: s2.wins + (player1Won ? 0 : 1),
+        losses: s2.losses + (player1Won ? 1 : 0),
+        points: s2.points + (player1Won ? 0 : 3),
+        games_played: s2.games_played + 1,
+        crowns_for: s2.crowns_for + (m.player2_score ?? 0),
+        crowns_against: s2.crowns_against + (m.player1_score ?? 0),
+        crown_difference: (s2.crowns_for + (m.player2_score ?? 0)) - (s2.crowns_against + (m.player1_score ?? 0)),
+      })
+      .eq('id', s2.id)
+  }
 }

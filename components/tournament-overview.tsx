@@ -121,10 +121,11 @@ export function TournamentOverview({ tournaments }: TournamentOverviewProps) {
                               )}
                               <span className="text-sm text-muted-foreground flex items-center gap-1" suppressHydrationWarning>
                                 <Calendar className="w-4 h-4" />
-                                {new Date(tournament.created_at).toLocaleDateString('en-US', { 
-                                  year: 'numeric', 
-                                  month: 'short', 
-                                  day: 'numeric' 
+                                {new Date(tournament.created_at).toLocaleDateString('en-US', {
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: 'numeric',
+                                  timeZone: 'UTC'
                                 })}
                               </span>
                             </div>
@@ -191,8 +192,13 @@ export function TournamentOverview({ tournaments }: TournamentOverviewProps) {
                       </Badge>
                     </div>
                     <CardTitle className="text-lg text-white">{tournament.name}</CardTitle>
-                    <CardDescription>
-                      {new Date(tournament.created_at).toLocaleDateString()}
+                    <CardDescription suppressHydrationWarning>
+                      {new Date(tournament.created_at).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        timeZone: 'UTC'
+                      })}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>

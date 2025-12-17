@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { generateLeagueFixtures, updateStandingsSimple, generatePlayoffBracket } from '@/lib/tournament-utils'
-import { Trophy, Play, ArrowRight, Medal, ArrowLeft, Eye, Users, Swords, Crown, Edit, Trash2, Settings, MoreVertical, UserMinus, AlertTriangle, ChevronDown, Check, X } from 'lucide-react'
+import { generateLeagueFixtures, updateStandingsSimple, generatePlayoffBracket, recalculateStandings } from '@/lib/tournament-utils'
+import { Trophy, Play, ArrowRight, Medal, ArrowLeft, Eye, Users, Swords, Crown, Edit, Trash2, Settings, MoreVertical, UserMinus, AlertTriangle, ChevronDown, Check, X, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -52,7 +52,9 @@ function AdminDashboardContent({
     player2Name: string
     isPlayoff: boolean
     round?: string
-  }>({ open: false, matchId: '', player1Id: '', player2Id: '', player1Name: '', player2Name: '', isPlayoff: false })
+    isEdit?: boolean
+    originalStatus?: 'pending' | 'completed'
+  }>({ open: false, matchId: '', player1Id: '', player2Id: '', player1Name: '', player2Name: '', isPlayoff: false, isEdit: false, originalStatus: 'pending' })
   const [scores, setScores] = useState({ player1: '', player2: '' })
 
   // Edit tournament dialog state
@@ -102,13 +104,164 @@ function AdminDashboardContent({
       supabase.from('playoff_matches').select('*, player1:players!playoff_matches_player1_id_fkey(*), player2:players!playoff_matches_player2_id_fkey(*), winner:players!playoff_matches_winner_id_fkey(*)').eq('tournament_id', tournamentId).order('round').order('match_number')
     ])
 
+    // If quarters have completed but semis were generated in the wrong pairing/order,
+    // auto-correct semis (safe: only pending semis with no winner).
+    let playoffMatches = playoffRes.data || []
+    if (tournamentRes.data) {
+      const standings = standingsRes.data || []
+      const rankMap = new Map(standings.map((s: any, i: number) => [s.player_id, i + 1]))
+      // Desired bracket halves order: 1v8, 4v5, 2v7, 3v6
+      const desiredSeedOrder = [1, 4, 2, 3]
+
+      let quarters = playoffMatches.filter((m: any) => m.round === 'quarter')
+      let semis = playoffMatches.filter((m: any) => m.round === 'semi')
+
+      // Legacy fix: if quarter match_numbers were created in the wrong bracket-half order,
+      // renumber them so that semi-final progression (1&2, 3&4) produces the expected bracket.
+      const isUnsetScore = (v: any) => v === null || v === undefined || v === 0
+      const semisPlayedOrLocked = semis.some(
+        (m: any) =>
+          m.status === 'completed' ||
+          (m.winner_id !== null && m.winner_id !== undefined) ||
+          !isUnsetScore(m.player1_score) ||
+          !isUnsetScore(m.player2_score)
+      )
+
+      const seedIndex = (m: any) => {
+        const r1 = rankMap.get(m.player1_id)
+        const r2 = rankMap.get(m.player2_id)
+        const minRank = typeof r1 === 'number' && typeof r2 === 'number' ? Math.min(r1, r2) : undefined
+        const idx = typeof minRank === 'number' ? desiredSeedOrder.indexOf(minRank) : -1
+        return idx === -1 ? Number.MAX_SAFE_INTEGER : idx
+      }
+
+      if (quarters.length === 4 && !semisPlayedOrLocked) {
+        const orderedForBracket = [...quarters].sort((a: any, b: any) => {
+          const ai = seedIndex(a)
+          const bi = seedIndex(b)
+          if (ai !== bi) return ai - bi
+          return (a.match_number ?? 0) - (b.match_number ?? 0)
+        })
+
+        const renumberOps: PromiseLike<any>[] = []
+        orderedForBracket.forEach((m: any, idx: number) => {
+          const desiredMatchNumber = idx + 1
+          if (m.match_number !== desiredMatchNumber) {
+            renumberOps.push(
+              supabase
+                .from('playoff_matches')
+                .update({ match_number: desiredMatchNumber })
+                .eq('id', m.id)
+            )
+          }
+        })
+
+        if (renumberOps.length > 0) {
+          await Promise.all(renumberOps)
+          const playoffResRenumbered = await supabase
+            .from('playoff_matches')
+            .select('*, player1:players!playoff_matches_player1_id_fkey(*), player2:players!playoff_matches_player2_id_fkey(*), winner:players!playoff_matches_winner_id_fkey(*)')
+            .eq('tournament_id', tournamentId)
+            .order('round')
+            .order('match_number')
+          playoffMatches = playoffResRenumbered.data || playoffMatches
+          quarters = playoffMatches.filter((m: any) => m.round === 'quarter')
+          semis = playoffMatches.filter((m: any) => m.round === 'semi')
+        }
+      }
+
+      const allQuarterWinnersReady =
+        quarters.length === 4 &&
+        quarters.every((m: any) => m.status === 'completed' && m.winner_id)
+
+      const safeToOverwriteSemi = (m: any) =>
+        m.status === 'pending' &&
+        (m.winner_id === null || m.winner_id === undefined) &&
+        isUnsetScore(m.player1_score) &&
+        isUnsetScore(m.player2_score)
+
+      if (allQuarterWinnersReady) {
+        // IMPORTANT: Use the quarterfinals' `match_number` ordering to determine bracket halves.
+        // This keeps progression stable even when league standings have ties/reordering.
+        const orderedQuarters = [...quarters].sort((a: any, b: any) => (a.match_number ?? 0) - (b.match_number ?? 0))
+
+        const desired = [
+          { match_number: 1, player1_id: orderedQuarters[0].winner_id, player2_id: orderedQuarters[1].winner_id },
+          { match_number: 2, player1_id: orderedQuarters[2].winner_id, player2_id: orderedQuarters[3].winner_id },
+        ]
+
+        const semi1 = semis.find((m: any) => m.match_number === 1)
+        const semi2 = semis.find((m: any) => m.match_number === 2)
+
+        const needsFix = (m: any, target: any) =>
+          m &&
+          (m.player1_id !== target.player1_id || m.player2_id !== target.player2_id) &&
+          safeToOverwriteSemi(m)
+
+        const didUpdate = [] as PromiseLike<any>[]
+
+        if (semi1 && needsFix(semi1, desired[0])) {
+          didUpdate.push(
+            supabase
+              .from('playoff_matches')
+              .update({
+                player1_id: desired[0].player1_id,
+                player2_id: desired[0].player2_id,
+                player1_score: null,
+                player2_score: null,
+                winner_id: null,
+                status: 'pending',
+              })
+              .eq('id', semi1.id)
+          )
+        }
+
+        if (semi2 && needsFix(semi2, desired[1])) {
+          didUpdate.push(
+            supabase
+              .from('playoff_matches')
+              .update({
+                player1_id: desired[1].player1_id,
+                player2_id: desired[1].player2_id,
+                player1_score: null,
+                player2_score: null,
+                winner_id: null,
+                status: 'pending',
+              })
+              .eq('id', semi2.id)
+          )
+        }
+
+        // If semis don't exist yet, create them in correct order.
+        if (!semi1 && !semi2 && semis.length === 0) {
+          didUpdate.push(
+            supabase.from('playoff_matches').insert([
+              { tournament_id: tournamentId, round: 'semi', match_number: 1, player1_id: desired[0].player1_id, player2_id: desired[0].player2_id, status: 'pending' },
+              { tournament_id: tournamentId, round: 'semi', match_number: 2, player1_id: desired[1].player1_id, player2_id: desired[1].player2_id, status: 'pending' },
+            ])
+          )
+        }
+
+        if (didUpdate.length > 0) {
+          await Promise.all(didUpdate)
+          const playoffRes2 = await supabase
+            .from('playoff_matches')
+            .select('*, player1:players!playoff_matches_player1_id_fkey(*), player2:players!playoff_matches_player2_id_fkey(*), winner:players!playoff_matches_winner_id_fkey(*)')
+            .eq('tournament_id', tournamentId)
+            .order('round')
+            .order('match_number')
+          playoffMatches = playoffRes2.data || playoffMatches
+        }
+      }
+    }
+
     if (tournamentRes.data) {
       setData({
         tournament: tournamentRes.data,
         players: playersRes.data || [],
         matches: matchesRes.data || [],
         standings: standingsRes.data || [],
-        playoffMatches: playoffRes.data || [],
+        playoffMatches,
       })
       setTournamentName(tournamentRes.data.name)
       setDescription(tournamentRes.data.description || '')
@@ -131,9 +284,21 @@ function AdminDashboardContent({
     }
   }
 
-  const openScoreDialog = (matchId: string, player1Id: string, player2Id: string, player1Name: string, player2Name: string, isPlayoff = false, round?: string) => {
-    setScores({ player1: '', player2: '' })
-    setScoreDialog({ open: true, matchId, player1Id, player2Id, player1Name, player2Name, isPlayoff, round })
+  const openScoreDialog = (
+    matchId: string,
+    player1Id: string,
+    player2Id: string,
+    player1Name: string,
+    player2Name: string,
+    isPlayoff = false,
+    round?: string,
+    isEdit: boolean = false,
+    existingScore1?: number | null,
+    existingScore2?: number | null,
+    originalStatus: 'pending' | 'completed' = 'pending'
+  ) => {
+    setScores({ player1: existingScore1 != null ? String(existingScore1) : '', player2: existingScore2 != null ? String(existingScore2) : '' })
+    setScoreDialog({ open: true, matchId, player1Id, player2Id, player1Name, player2Name, isPlayoff, round, isEdit, originalStatus })
   }
 
   const handleSubmitScore = async () => {
@@ -170,40 +335,70 @@ function AdminDashboardContent({
             .eq('round', 'quarter')
 
           if (quarters && quarters.length === 4 && quarters.every(m => m.status === 'completed')) {
-            // Avoid duplicate semi creation
+            // IMPORTANT: Use the quarterfinals' `match_number` ordering to determine bracket halves.
+            // This keeps progression stable even when league standings have ties/reordering.
+            const orderedQuarters = [...quarters].sort((a, b) => (a.match_number ?? 0) - (b.match_number ?? 0))
+
+            const desiredSemis = [
+              { tournament_id: tournamentId, round: 'semi', match_number: 1, player1_id: orderedQuarters[0].winner_id, player2_id: orderedQuarters[1].winner_id, status: 'pending' as const },
+              { tournament_id: tournamentId, round: 'semi', match_number: 2, player1_id: orderedQuarters[2].winner_id, player2_id: orderedQuarters[3].winner_id, status: 'pending' as const },
+            ]
+
             const { data: existingSemis } = await supabase
               .from('playoff_matches')
-              .select('id')
+              .select('*')
               .eq('tournament_id', tournamentId)
               .eq('round', 'semi')
+              .order('match_number', { ascending: true })
 
             if (!existingSemis || existingSemis.length === 0) {
-              // Sort quarters into bracket order: 1v8, 4v5, 2v7, 3v6
-              const rankMap = new Map((data.standings || []).map((s: any, i: number) => [s.player_id, i + 1]))
-              const desiredSeedOrder = [1, 4, 2, 3]
+              await supabase.from('playoff_matches').insert(desiredSemis)
+              await supabase.from('tournaments').update({ current_phase: 'semi' }).eq('id', tournamentId)
+            } else {
+              // If semis were generated in the wrong order earlier, fix them as long as they haven't been played.
+              const safeToOverwrite = (m: any) =>
+                m.status === 'pending' &&
+                (m.player1_score === null || m.player1_score === undefined) &&
+                (m.player2_score === null || m.player2_score === undefined) &&
+                (m.winner_id === null || m.winner_id === undefined)
 
-              const seedIndex = (m: any) => {
-                const r1 = rankMap.get(m.player1_id)
-                const r2 = rankMap.get(m.player2_id)
-                const minRank = typeof r1 === 'number' && typeof r2 === 'number' ? Math.min(r1, r2) : undefined
-                const idx = typeof minRank === 'number' ? desiredSeedOrder.indexOf(minRank) : -1
-                return idx === -1 ? Number.MAX_SAFE_INTEGER : idx
+              const isUnsetScore = (v: any) => v === null || v === undefined || v === 0
+              const safeToOverwriteAllowZero = (m: any) =>
+                m.status === 'pending' &&
+                (m.winner_id === null || m.winner_id === undefined) &&
+                isUnsetScore(m.player1_score) &&
+                isUnsetScore(m.player2_score)
+
+              const semi1 = existingSemis.find((m: any) => m.match_number === 1)
+              const semi2 = existingSemis.find((m: any) => m.match_number === 2)
+
+              if (semi1 && (safeToOverwrite(semi1) || safeToOverwriteAllowZero(semi1))) {
+                await supabase
+                  .from('playoff_matches')
+                  .update({
+                    player1_id: desiredSemis[0].player1_id,
+                    player2_id: desiredSemis[0].player2_id,
+                    player1_score: null,
+                    player2_score: null,
+                    winner_id: null,
+                    status: 'pending',
+                  })
+                  .eq('id', semi1.id)
               }
 
-              const orderedQuarters = [...quarters].sort((a, b) => {
-                const ai = seedIndex(a)
-                const bi = seedIndex(b)
-                if (ai !== bi) return ai - bi
-                return (a.match_number ?? 0) - (b.match_number ?? 0)
-              })
-
-              const semis = [
-                { tournament_id: tournamentId, round: 'semi', match_number: 1, player1_id: orderedQuarters[0].winner_id, player2_id: orderedQuarters[1].winner_id, status: 'pending' },
-                { tournament_id: tournamentId, round: 'semi', match_number: 2, player1_id: orderedQuarters[2].winner_id, player2_id: orderedQuarters[3].winner_id, status: 'pending' },
-              ]
-
-              await supabase.from('playoff_matches').insert(semis)
-              await supabase.from('tournaments').update({ current_phase: 'semi' }).eq('id', tournamentId)
+              if (semi2 && (safeToOverwrite(semi2) || safeToOverwriteAllowZero(semi2))) {
+                await supabase
+                  .from('playoff_matches')
+                  .update({
+                    player1_id: desiredSemis[1].player1_id,
+                    player2_id: desiredSemis[1].player2_id,
+                    player1_score: null,
+                    player2_score: null,
+                    winner_id: null,
+                    status: 'pending',
+                  })
+                  .eq('id', semi2.id)
+              }
             }
           }
         } else if (scoreDialog.round === 'semi') {
@@ -213,15 +408,32 @@ function AdminDashboardContent({
             .eq('tournament_id', tournamentId)
             .eq('round', 'semi')
             .order('match_number', { ascending: true })
-          if (semis && semis.every(m => m.status === 'completed')) {
-            await supabase.from('playoff_matches').insert({ tournament_id: tournamentId, round: 'final', match_number: 1, player1_id: semis[0].winner_id, player2_id: semis[1].winner_id, status: 'pending' })
-            await supabase.from('tournaments').update({ current_phase: 'final' }).eq('id', tournamentId)
+          if (semis && semis.length === 2 && semis.every(m => m.status === 'completed')) {
+            const { data: existingFinal } = await supabase
+              .from('playoff_matches')
+              .select('id')
+              .eq('tournament_id', tournamentId)
+              .eq('round', 'final')
+
+            if (!existingFinal || existingFinal.length === 0) {
+              await supabase.from('playoff_matches').insert({ tournament_id: tournamentId, round: 'final', match_number: 1, player1_id: semis[0].winner_id, player2_id: semis[1].winner_id, status: 'pending' })
+              await supabase.from('tournaments').update({ current_phase: 'final' }).eq('id', tournamentId)
+            }
           }
         } else if (scoreDialog.round === 'final') {
           await supabase.from('tournaments').update({ status: 'completed' }).eq('id', tournamentId)
         }
       } else {
-        await updateStandingsSimple(tournamentId, scoreDialog.matchId, scoreDialog.player1Id, scoreDialog.player2Id, player1Score, player2Score)
+        if (scoreDialog.isEdit) {
+          // Update match with new scores and then fully recalc standings to avoid double counting
+          await supabase
+            .from('league_matches')
+            .update({ player1_score: player1Score, player2_score: player2Score, status: 'completed' })
+            .eq('id', scoreDialog.matchId)
+          await recalculateStandings(tournamentId)
+        } else {
+          await updateStandingsSimple(tournamentId, scoreDialog.matchId, scoreDialog.player1Id, scoreDialog.player2Id, player1Score, player2Score)
+        }
       }
 
       await refreshData()
@@ -244,6 +456,21 @@ function AdminDashboardContent({
     } catch (error) {
       console.error('Error generating playoffs:', error)
       toast.error('Failed to generate playoffs. Make sure league phase is complete.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Recalculate standings from stored results
+  const handleRecalculateStandings = async () => {
+    setLoading(true)
+    try {
+      await recalculateStandings(tournamentId)
+      await refreshData()
+      toast.success('Standings recalculated successfully!')
+    } catch (error) {
+      console.error('Error recalculating standings:', error)
+      toast.error('Failed to recalculate standings')
     } finally {
       setLoading(false)
     }
@@ -457,11 +684,11 @@ function AdminDashboardContent({
               <CardDescription>Review players and generate fixtures</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {players.length < 12 && (
+              {players.length < 4 && (
                 <Alert className="border-yellow-500/50 bg-yellow-500/10">
                   <AlertTriangle className="w-4 h-4 text-yellow-400" />
                   <AlertDescription className="text-yellow-200">
-                    You need exactly 12 players to start the tournament. Currently have {players.length} players.
+                    You need at least 4 players to start the tournament. Currently have {players.length} players.
                   </AlertDescription>
                 </Alert>
               )}
@@ -503,7 +730,7 @@ function AdminDashboardContent({
               </div>
               <Button
                 onClick={handleGenerateFixtures}
-                disabled={loading || players.length !== 12}
+                disabled={loading || players.length < 4}
                 size="lg"
                 className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 disabled:opacity-50"
               >
@@ -512,7 +739,7 @@ function AdminDashboardContent({
                 ) : (
                   <Play className="w-5 h-5 mr-2" />
                 )}
-                Generate League Fixtures (66 Matches)
+                Generate League Fixtures
               </Button>
             </CardContent>
           </Card>
@@ -530,11 +757,19 @@ function AdminDashboardContent({
             <TabsContent value="standings">
               <Card className="glass-card border-purple-500/20">
                 <CardHeader>
-                  <CardTitle className="text-white flex items-center gap-2">
-                    <Trophy className="w-5 h-5 text-yellow-400" />
-                    League Standings
-                  </CardTitle>
-                  <CardDescription>Top 8 advance to playoffs • Click on a player to view match history</CardDescription>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-white flex items-center gap-2">
+                        <Trophy className="w-5 h-5 text-yellow-400" />
+                        League Standings
+                      </CardTitle>
+                      <CardDescription>Top 4/8 advance based on total players • Click a player to view match history</CardDescription>
+                    </div>
+                    <Button onClick={handleRecalculateStandings} variant="outline" size="sm" className="border-yellow-500/50 text-yellow-300 hover:bg-yellow-500/10">
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Recalculate
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="overflow-x-auto">
                   <Accordion type="single" collapsible className="w-full min-w-[500px]">
@@ -552,6 +787,7 @@ function AdminDashboardContent({
                       <div className="w-6 shrink-0"></div>
                     </div>
                     {standings.map((s, idx) => {
+                      const playoffCut = players.length >= 16 ? 16 : players.length >= 8 ? 8 : 4
                       const playerMatches = matches.filter(
                         (m: any) => m.player1_id === s.player_id || m.player2_id === s.player_id
                       )
@@ -559,11 +795,11 @@ function AdminDashboardContent({
                       const pendingMatches = playerMatches.filter((m: any) => m.status === 'pending')
                       
                       return (
-                        <AccordionItem key={s.id} value={s.id} className={`border-b border-border ${idx < 8 ? 'bg-green-500/10' : ''}`}>
+                        <AccordionItem key={s.id} value={s.id} className={`border-b border-border ${idx < playoffCut ? 'bg-green-500/10' : ''}`}>
                           <AccordionTrigger className="hover:no-underline hover:bg-white/5 px-3 py-3">
                             <div className="flex items-center w-full text-sm">
                               <div className="w-9 shrink-0 font-medium flex items-center justify-center gap-0.5">
-                                {idx < 8 && <Medal className="w-3 h-3 text-yellow-400" />}
+                                {idx < playoffCut && <Medal className="w-3 h-3 text-yellow-400" />}
                                 <span>{idx + 1}</span>
                               </div>
                               <div className="flex-1 min-w-[80px] font-semibold text-white text-left truncate pr-1">{s.players?.player_name}</div>
@@ -677,13 +913,22 @@ function AdminDashboardContent({
                             </span>
                             <span className="font-medium text-sm truncate flex-1 text-right">{match.player2?.player_name}</span>
                           </div>
-                          {match.status === 'pending' && (
+                          {match.status === 'pending' ? (
                             <Button
                               onClick={() => openScoreDialog(match.id, match.player1_id, match.player2_id, match.player1?.player_name, match.player2?.player_name)}
                               size="sm"
                               className="w-full bg-blue-600 hover:bg-blue-700"
                             >
                               Enter Result
+                            </Button>
+                          ) : (
+                            <Button
+                              onClick={() => openScoreDialog(match.id, match.player1_id, match.player2_id, match.player1?.player_name, match.player2?.player_name, false, undefined, true, match.player1_score, match.player2_score, 'completed')}
+                              variant="ghost"
+                              size="sm"
+                              className="w-full text-yellow-300 hover:bg-yellow-500/10"
+                            >
+                              Edit Result
                             </Button>
                           )}
                         </div>
@@ -792,12 +1037,32 @@ function AdminDashboardContent({
                               {round === 'final' && <Trophy className="w-5 h-5" />}
                             </div>
                           )}
-                          {match.status === 'pending' && (
+                          {match.status === 'pending' ? (
                             <Button
                               onClick={() => openScoreDialog(match.id, match.player1_id, match.player2_id, match.player1?.player_name, match.player2?.player_name, true, match.round)}
                               className={`w-full ${round === 'final' ? 'bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600' : 'bg-purple-600 hover:bg-purple-700'}`}
                             >
                               Enter Result
+                            </Button>
+                          ) : (
+                            <Button
+                              onClick={() => openScoreDialog(
+                                match.id,
+                                match.player1_id,
+                                match.player2_id,
+                                match.player1?.player_name,
+                                match.player2?.player_name,
+                                true,
+                                match.round,
+                                true,
+                                match.player1_score,
+                                match.player2_score,
+                                'completed'
+                              )}
+                              variant="ghost"
+                              className="w-full text-yellow-300 hover:bg-yellow-500/10"
+                            >
+                              Edit Result
                             </Button>
                           )}
                         </div>

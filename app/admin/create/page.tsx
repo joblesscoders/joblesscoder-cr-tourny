@@ -19,13 +19,20 @@ function CreateTournamentForm() {
   const [tournamentName, setTournamentName] = useState('')
   const [description, setDescription] = useState('')
   const [rules, setRules] = useState<string[]>([''])
+  const [competitionType, setCompetitionType] = useState<'solo' | 'team'>('solo')
+  const [teamSize, setTeamSize] = useState<number>(5)
+  const [desiredTeams, setDesiredTeams] = useState<number>(8)
   const [players, setPlayers] = useState<Array<{ name: string; tag: string }>>([
     { name: '', tag: '' },
   ])
+  const [teams, setTeams] = useState<Array<{ name: string; tag: string; members: Array<{ name: string; ign: string }> }>>([
+    { name: '', tag: '', members: [{ name: '', ign: '' }, { name: '', ign: '' }, { name: '', ign: '' }, { name: '', ign: '' }, { name: '', ign: '' }] }
+  ])
+  const [desiredPlayers, setDesiredPlayers] = useState<number>(12)
   const [loading, setLoading] = useState(false)
 
   const addPlayer = () => {
-    if (players.length < 12) {
+    if (players.length < desiredPlayers) {
       setPlayers([...players, { name: '', tag: '' }])
     }
   }
@@ -54,16 +61,66 @@ function CreateTournamentForm() {
     setPlayers(updated)
   }
 
+  const addTeam = () => {
+    if (teams.length < desiredTeams) {
+      setTeams(prev => ([...prev, { name: '', tag: '', members: Array.from({ length: teamSize }, () => ({ name: '', ign: '' })) }]))
+    }
+  }
+
+  const removeTeam = (index: number) => {
+    setTeams(teams.filter((_, i) => i !== index))
+  }
+
+  const updateTeamField = (index: number, field: 'name' | 'tag', value: string) => {
+    const updated = [...teams]
+    updated[index][field] = value
+    setTeams(updated)
+  }
+
+  const updateMember = (teamIdx: number, memberIdx: number, field: 'name' | 'ign', value: string) => {
+    setTeams(prev => {
+      const copy = [...prev]
+      const mCopy = [...copy[teamIdx].members]
+      mCopy[memberIdx] = { ...mCopy[memberIdx], [field]: value }
+      copy[teamIdx] = { ...copy[teamIdx], members: mCopy }
+      return copy
+    })
+  }
+
   const createTournament = async () => {
     if (!tournamentName.trim()) {
       toast.error('Please enter a tournament name')
       return
     }
 
-    const validPlayers = players.filter(p => p.name.trim() !== '')
-    if (validPlayers.length !== 12) {
-      toast.error(`Please enter exactly 12 players (currently ${validPlayers.length})`)
-      return
+    if (competitionType === 'solo') {
+      const validPlayers = players.filter(p => p.name.trim() !== '')
+      if (validPlayers.length !== desiredPlayers) {
+        toast.error(`Please enter exactly ${desiredPlayers} players (currently ${validPlayers.length})`)
+        return
+      }
+    } else {
+      // Validate teams
+      if (teams.length !== desiredTeams) {
+        toast.error(`Please enter exactly ${desiredTeams} teams`)
+        return
+      }
+      for (let i = 0; i < teams.length; i++) {
+        const t = teams[i]
+        if (!t.name.trim()) {
+          toast.error(`Team #${i + 1} is missing a name`)
+          return
+        }
+        if (t.members.length !== teamSize) {
+          toast.error(`Team #${i + 1} must have exactly ${teamSize} players`)
+          return
+        }
+        const filled = t.members.filter(m => m.name.trim())
+        if (filled.length !== teamSize) {
+          toast.error(`All ${teamSize} members must be named for team #${i + 1}`)
+          return
+        }
+      }
     }
 
     setLoading(true)
@@ -78,6 +135,10 @@ function CreateTournamentForm() {
           rules: rules.filter(r => r.trim() !== ''),
           status: 'setup',
           current_phase: null,
+          // New fields for team tournaments (ignored by DB if column not present)
+          competition_type: competitionType,
+          team_size: competitionType === 'team' ? teamSize : 1,
+          max_teams: competitionType === 'team' ? desiredTeams : desiredPlayers,
         })
         .select()
         .single()
@@ -86,20 +147,47 @@ function CreateTournamentForm() {
         throw new Error('Failed to create tournament')
       }
 
-      // Create players - all in single league
-      const playerInserts = validPlayers.map((player, index) => ({
-        tournament_id: tournament.id,
-        player_name: player.name,
-        player_tag: player.tag || null,
-        seed_position: index + 1,
-      }))
+      if (competitionType === 'solo') {
+        // Solo: insert players directly
+        const validPlayers = players.filter(p => p.name.trim() !== '')
+        const playerInserts = validPlayers.map((player, index) => ({
+          tournament_id: tournament.id,
+          player_name: player.name,
+          player_tag: player.tag || null,
+          seed_position: index + 1,
+        }))
+        const { error: playersError } = await supabase.from('players').insert(playerInserts)
+        if (playersError) throw new Error('Failed to add players')
+      } else {
+        // Team: insert teams then members as players linked via team_id
+        const teamInserts = teams.map((t, idx) => ({
+          tournament_id: tournament.id,
+          team_name: t.name,
+          team_tag: t.tag || null,
+          seed_position: idx + 1,
+        }))
+        const { data: insertedTeams, error: teamErr } = await supabase
+          .from('teams')
+          .insert(teamInserts)
+          .select()
+        if (teamErr) throw new Error('Failed to add teams')
 
-      const { error: playersError } = await supabase
-        .from('players')
-        .insert(playerInserts)
-
-      if (playersError) {
-        throw new Error('Failed to add players')
+        // Map by order
+        const playersToInsert: Array<any> = []
+        teams.forEach((t, idx) => {
+          const teamId = insertedTeams?.[idx]?.id
+          t.members.forEach((m) => {
+            playersToInsert.push({
+              tournament_id: tournament.id,
+              team_id: teamId,
+              player_name: m.name,
+              player_tag: m.ign || null,
+              seed_position: null,
+            })
+          })
+        })
+        const { error: membersErr } = await supabase.from('players').insert(playersToInsert)
+        if (membersErr) throw new Error('Failed to add team members')
       }
 
       toast.success('Tournament created successfully!')
@@ -133,7 +221,7 @@ function CreateTournamentForm() {
             Create New Tournament
           </h1>
           <p className="text-muted-foreground">
-            Set up a new 12-player tournament for your clan
+            Set up a new tournament with flexible player counts
           </p>
         </div>
 
@@ -144,7 +232,7 @@ function CreateTournamentForm() {
               Tournament Details
             </CardTitle>
             <CardDescription>
-              Enter the tournament name and all 12 players
+              Enter tournament details. Choose Solo or Team mode.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-8">
@@ -196,73 +284,227 @@ function CreateTournamentForm() {
               </div>
             </div>
 
-            {/* Players section */}
+            {/* Mode toggle */}
+            <div className="space-y-2">
+              <Label className="text-white">Tournament Type</Label>
+              <div className="flex gap-2">
+                <Button type="button" variant={competitionType === 'solo' ? 'default' : 'outline'} onClick={() => setCompetitionType('solo')}>
+                  Solo
+                </Button>
+                <Button type="button" variant={competitionType === 'team' ? 'default' : 'outline'} onClick={() => setCompetitionType('team')}>
+                  Team
+                </Button>
+              </div>
+            </div>
+
+            {/* Players/Teams section */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <Label className="text-white flex items-center gap-2">
                     <Users className="w-4 h-4" />
-                    Players
+                    {competitionType === 'team' ? 'Teams' : 'Players'}
                   </Label>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Add exactly 12 players for the tournament
+                    {competitionType === 'team'
+                      ? 'Choose team count and team size, then add teams and members'
+                      : 'Choose player count (4-32), then add players'}
                   </p>
                 </div>
-                <Badge 
-                  variant={players.filter(p => p.name.trim()).length === 12 ? "default" : "secondary"}
-                  className={players.filter(p => p.name.trim()).length === 12 ? "bg-green-500/20 text-green-400" : ""}
-                >
-                  {players.filter(p => p.name.trim()).length}/12 Players
-                </Badge>
-              </div>
-
-              {players.length < 12 && (
-                <Button
-                  onClick={addPlayer}
-                  variant="outline"
-                  className="w-full border-dashed border-purple-500/50 hover:bg-purple-500/10 text-purple-300"
-                >
-                  <UserPlus className="w-4 h-4 mr-2" />
-                  Add Player
-                </Button>
-              )}
-
-              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-                {players.map((player, index) => (
-                  <div 
-                    key={index} 
-                    className="flex gap-3 items-center p-3 rounded-lg bg-secondary/50 border border-border"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-300 font-bold text-sm">
-                      #{index + 1}
+                <div className="flex items-center gap-3">
+                  {competitionType === 'team' ? (
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-white text-sm">Teams</Label>
+                        <Input
+                          type="number"
+                          min={4}
+                          max={32}
+                          value={desiredTeams}
+                          onChange={(e) => {
+                            const val = Math.max(4, Math.min(32, parseInt(e.target.value || '0')))
+                            setDesiredTeams(val)
+                            setTeams(prev => {
+                              const copy = [...prev]
+                              if (copy.length < val) return copy.concat(Array.from({ length: val - copy.length }, () => ({ name: '', tag: '', members: Array.from({ length: teamSize }, () => ({ name: '', ign: '' })) })))
+                              if (copy.length > val) return copy.slice(0, val)
+                              return copy
+                            })
+                          }}
+                          className="w-20 bg-background border-border focus:border-purple-500"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-white text-sm">Team Size</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={teamSize}
+                          onChange={(e) => {
+                            const val = Math.max(1, Math.min(10, parseInt(e.target.value || '0')))
+                            setTeamSize(val)
+                            setTeams(prev => prev.map(t => ({ ...t, members: Array.from({ length: val }, (_, i) => t.members[i] ? t.members[i] : { name: '', ign: '' }) })))
+                          }}
+                          className="w-24 bg-background border-border focus:border-purple-500"
+                        />
+                      </div>
+                      <Badge variant="secondary">
+                        {teams.filter(t => t.name.trim()).length}/{desiredTeams} Teams
+                      </Badge>
                     </div>
-                    <Input
-                      type="text"
-                      value={player.name}
-                      onChange={(e) => updatePlayer(index, 'name', e.target.value)}
-                      className="flex-1 bg-background border-border focus:border-purple-500"
-                      placeholder="Player name"
-                    />
-                    <Input
-                      type="text"
-                      value={player.tag}
-                      onChange={(e) => updatePlayer(index, 'tag', e.target.value)}
-                      className="w-32 md:w-40 bg-background border-border focus:border-purple-500"
-                      placeholder="Tag (optional)"
-                    />
-                    {players.length > 1 && (
-                      <Button
-                        onClick={() => removePlayer(index)}
-                        variant="ghost"
-                        size="icon"
-                        className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-white text-sm">Count</Label>
+                        <Input
+                          type="number"
+                          min={4}
+                          max={32}
+                          value={desiredPlayers}
+                          onChange={(e) => {
+                            const val = Math.max(4, Math.min(32, parseInt(e.target.value || '0')))
+                            setDesiredPlayers(val)
+                            setPlayers((prev) => {
+                              const copy = [...prev]
+                              if (copy.length < val) {
+                                return copy.concat(Array.from({ length: val - copy.length }, () => ({ name: '', tag: '' })))
+                              } else if (copy.length > val) {
+                                return copy.slice(0, val)
+                              }
+                              return copy
+                            })
+                          }}
+                          className="w-20 bg-background border-border focus:border-purple-500"
+                        />
+                      </div>
+                      <Badge 
+                        variant={players.filter(p => p.name.trim()).length === desiredPlayers ? "default" : "secondary"}
+                        className={players.filter(p => p.name.trim()).length === desiredPlayers ? "bg-green-500/20 text-green-400" : ""}
                       >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                        {players.filter(p => p.name.trim()).length}/{desiredPlayers} Players
+                      </Badge>
+                    </>
+                  )}
+                </div>
               </div>
+
+              {competitionType === 'team' ? (
+                <>
+                  {teams.length < desiredTeams && (
+                    <Button
+                      onClick={addTeam}
+                      variant="outline"
+                      className="w-full border-dashed border-purple-500/50 hover:bg-purple-500/10 text-purple-300"
+                    >
+                      <UserPlus className="w-4 h-4 mr-2" />
+                      Add Team
+                    </Button>
+                  )}
+                  <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
+                    {teams.map((team, tIdx) => (
+                      <div key={tIdx} className="p-4 rounded-lg bg-secondary/50 border border-border">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-300 font-bold text-xs">
+                            #{tIdx + 1}
+                          </div>
+                          <Input
+                            type="text"
+                            value={team.name}
+                            onChange={(e) => updateTeamField(tIdx, 'name', e.target.value)}
+                            className="flex-1 bg-background border-border focus:border-purple-500"
+                            placeholder="Team name"
+                          />
+                          <Input
+                            type="text"
+                            value={team.tag}
+                            onChange={(e) => updateTeamField(tIdx, 'tag', e.target.value)}
+                            className="w-40 bg-background border-border focus:border-purple-500"
+                            placeholder="Team tag (optional)"
+                          />
+                          {teams.length > 1 && (
+                            <Button onClick={() => removeTeam(tIdx)} variant="ghost" size="icon" className="text-red-400">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                        <div className="grid md:grid-cols-2 gap-3">
+                          {Array.from({ length: teamSize }).map((_, mIdx) => (
+                            <div key={mIdx} className="flex gap-2 items-center">
+                              <div className="w-6 h-6 rounded-full bg-blue-500/20 text-blue-300 text-xs flex items-center justify-center">
+                                {mIdx + 1}
+                              </div>
+                              <Input
+                                type="text"
+                                value={team.members[mIdx]?.name || ''}
+                                onChange={(e) => updateMember(tIdx, mIdx, 'name', e.target.value)}
+                                className="flex-1 bg-background border-border focus:border-purple-500"
+                                placeholder="Player name"
+                              />
+                              <Input
+                                type="text"
+                                value={team.members[mIdx]?.ign || ''}
+                                onChange={(e) => updateMember(tIdx, mIdx, 'ign', e.target.value)}
+                                className="w-36 bg-background border-border focus:border-purple-500"
+                                placeholder="IGN (optional)"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {players.length < desiredPlayers && (
+                    <Button
+                      onClick={addPlayer}
+                      variant="outline"
+                      className="w-full border-dashed border-purple-500/50 hover:bg-purple-500/10 text-purple-300"
+                    >
+                      <UserPlus className="w-4 h-4 mr-2" />
+                      Add Player
+                    </Button>
+                  )}
+                  <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+                    {players.map((player, index) => (
+                      <div 
+                        key={index} 
+                        className="flex gap-3 items-center p-3 rounded-lg bg-secondary/50 border border-border"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-300 font-bold text-sm">
+                          #{index + 1}
+                        </div>
+                        <Input
+                          type="text"
+                          value={player.name}
+                          onChange={(e) => updatePlayer(index, 'name', e.target.value)}
+                          className="flex-1 bg-background border-border focus:border-purple-500"
+                          placeholder="Player name"
+                        />
+                        <Input
+                          type="text"
+                          value={player.tag}
+                          onChange={(e) => updatePlayer(index, 'tag', e.target.value)}
+                          className="w-32 md:w-40 bg-background border-border focus:border-purple-500"
+                          placeholder="Tag (optional)"
+                        />
+                        {players.length > 1 && (
+                          <Button
+                            onClick={() => removePlayer(index)}
+                            variant="ghost"
+                            size="icon"
+                            className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Actions */}

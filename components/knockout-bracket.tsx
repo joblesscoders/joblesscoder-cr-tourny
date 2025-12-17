@@ -89,55 +89,35 @@ export default function KnockoutBracket({
   // Create rank map from standings
   const rankMap = new Map(standings.map((s, i) => [s.player_id, i + 1]))
 
-  // compute probable top8 from standings
-  const probable = (standings || []).slice(0, 8).map((s, i) => ({ 
+  // compute probable qualifiers from standings depending on size
+  const total = (standings || []).length
+  const qualifiers = total >= 16 ? 16 : total >= 8 ? 8 : 4
+  const probable = (standings || []).slice(0, qualifiers).map((s, i) => ({ 
     id: s.player_id, 
     name: s.players?.player_name || s.player_name,
     rank: i + 1
   }))
 
   // if playoffs exist, map matches
-  const quarters = playoffMatches?.filter((m: any) => m.round === 'quarter').sort((a: any, b: any) => a.match_number - b.match_number) || []
+  const quarters = playoffMatches?.filter((m: any) => m.round === 'quarter').sort((a: any, b: any) => (a.match_number ?? 0) - (b.match_number ?? 0)) || []
   const semis = playoffMatches?.filter((m: any) => m.round === 'semi').sort((a: any, b: any) => a.match_number - b.match_number) || []
   const finals = playoffMatches?.filter((m: any) => m.round === 'final').sort((a: any, b: any) => a.match_number - b.match_number) || []
 
-  const sortQuarterRowsForBracket = (rows: any[]) => {
-    // Desired visual bracket order (keeps 1/2 on opposite halves): 1v8, 4v5, 2v7, 3v6
-    const desiredSeedOrder = [1, 4, 2, 3]
-
-    const seedIndex = (row: any) => {
-      const r1 = rankMap.get(row.player1_id)
-      const r2 = rankMap.get(row.player2_id)
-      const minRank = typeof r1 === 'number' && typeof r2 === 'number' ? Math.min(r1, r2) : undefined
-      const idx = typeof minRank === 'number' ? desiredSeedOrder.indexOf(minRank) : -1
-      return idx === -1 ? Number.MAX_SAFE_INTEGER : idx
-    }
-
-    return [...rows].sort((a, b) => {
-      const ai = seedIndex(a)
-      const bi = seedIndex(b)
-      if (ai !== bi) return ai - bi
-      return (a.match_number ?? 0) - (b.match_number ?? 0)
-    })
-  }
-
   // before playoffs generate predicted quarter matches from probable
   const predictedQuarters: Match[] = []
-  if (status === 'league') {
-    // Order: 1v8, 4v5, 2v7, 3v6
-    const slots = [0, 7, 3, 4, 1, 6, 2, 5]
+  if (status === 'league' && qualifiers >= 8) {
+    // Order for 8: 1v8, 4v5, 2v7, 3v6
+    const slots8 = [0, 7, 3, 4, 1, 6, 2, 5]
     for (let i = 0; i < 8; i += 2) {
-      const p1 = probable[slots[i]]
-      const p2 = probable[slots[i+1]]
-      if (p1 && p2) {
-        predictedQuarters.push({ player1: p1, player2: p2 })
-      }
+      const p1 = probable[slots8[i]]
+      const p2 = probable[slots8[i+1]]
+      if (p1 && p2) predictedQuarters.push({ player1: p1, player2: p2 })
     }
   }
 
   const quarterMatches: Match[] = status === 'league'
     ? predictedQuarters
-    : sortQuarterRowsForBracket(quarters).map((q: any) => ({
+    : quarters.map((q: any) => ({
         player1: { id: q.player1_id, name: q.player1?.player_name, rank: rankMap.get(q.player1_id) },
         player2: { id: q.player2_id, name: q.player2?.player_name, rank: rankMap.get(q.player2_id) },
         score1: q.player1_score,
@@ -183,7 +163,7 @@ export default function KnockoutBracket({
   
   const fTop = (sTops[0] + sTops[1]) / 2
 
-  const totalHeight = qTops[3] + MATCH_HEIGHT + 40
+  const totalHeight = qualifiers >= 8 ? (qTops[3] + MATCH_HEIGHT + 40) : (sTops[1] + MATCH_HEIGHT + 40)
 
   // Helper for connectors
   const getCenter = (top: number) => top + MATCH_HEIGHT / 2
@@ -199,12 +179,12 @@ export default function KnockoutBracket({
         <Trophy className="w-8 h-8 text-yellow-400 animate-pulse" />
       </div>
 
-      <div className="relative min-w-[1100px] mx-auto px-6" style={{ height: totalHeight }}>
+      <div className="relative min-w-[900px] mx-auto px-6" style={{ height: totalHeight }}>
         {/* Columns Container */}
-        <div className="grid grid-cols-[280px_100px_280px_100px_300px] absolute inset-0 gap-0 justify-center">
+        <div className="grid absolute inset-0 gap-0 justify-center" style={{ gridTemplateColumns: qualifiers >= 8 ? '280px 100px 280px 100px 300px' : '280px 100px 300px' }}>
           
-          {/* QUARTER FINALS */}
-          <div className="relative bg-purple-500/5 rounded-3xl border border-purple-500/10 shadow-xl backdrop-blur-sm">
+          {/* QUARTER FINALS (only if top 8) */}
+          <div className={`relative bg-purple-500/5 rounded-3xl border border-purple-500/10 shadow-xl backdrop-blur-sm ${qualifiers < 8 ? 'hidden' : ''}`}>
              <div className="text-center font-bold text-purple-300 uppercase tracking-widest text-xs absolute w-full top-6">
                 Quarter Finals
               </div>
@@ -218,7 +198,7 @@ export default function KnockoutBracket({
           </div>
 
           {/* Q -> S CONNECTORS */}
-          <div className="relative">
+          <div className={`relative ${qualifiers < 8 ? 'hidden' : ''}`}>
             <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
               <defs>
                 <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
